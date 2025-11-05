@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:assignment/core/enums/app_enums.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:assignment/core/constants/app_color.dart';
 
@@ -12,6 +13,8 @@ class FileModel {
   UploadStatus status;
   Color fileColor;
   num uploadValue;
+  num totalValue;
+  CancelToken? cancelToken;
 
   FileModel({
     required this.name,
@@ -21,5 +24,7 @@ class FileModel {
     required this.status,
     Color? fileColor,
     this.uploadValue = 0,
+    this.totalValue = 0,
+    this.cancelToken,
   }) : fileColor = fileColor ?? AppColor.randomColor;
 }

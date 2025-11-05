@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
+import 'package:archive/archive.dart';
 import 'package:dio/dio.dart';
 
 import 'package:path_provider/path_provider.dart';
@@ -15,117 +16,19 @@ class ApiClient {
 
   final _dio = Dio()
     ..options = BaseOptions(
-      baseUrl: "<YOUR-BASE-URL>",
-      headers: {
-        "AUTHORIZATION": "<YOUR-ACCESS-TOKEN>"
-      }
+      baseUrl: "http://173.249.24.68:8252/api",
+      contentType: Headers.jsonContentType,
+      // headers: {"AUTHORIZATION": "<YOUR-ACCESS-TOKEN>"},
     )
     ..interceptors.add(LoggingInterceptor());
 
-  void updateDioHeader(Map<String, dynamic>? headers) {
-    _dio.options.headers = headers;
-  }
-
-  Future<dynamic> get(
-      String endpoint, {
-        Map<String, dynamic> query = const {},
-        CancelToken? cancelToken,
-        Map<String, dynamic>? data,
-        Options? options,
-        Function(int, int)? onReceiveProgress,
-      }) async {
-    try {
-      final response = await _dio.get(
-        endpoint,
-        queryParameters: query,
-        cancelToken: cancelToken,
-        data: data,
-        options: options,
-        onReceiveProgress: onReceiveProgress,
-      );
-      return response.data;
-    } catch (e) {
-      return _handleError(e);
-    }
-  }
-
-  Future<dynamic> post(
-      String endpoint,
-      dynamic body, {
-        Map<String, dynamic> query = const {},
-        CancelToken? cancelToken,
-        Options? options,
-        Function(int, int)? onReceiveProgress,
-        Function(int, int)? onSendProgress,
-      }) async {
-    try {
-      final response = await _dio.post(
-        endpoint,
-        data: jsonEncode(body),
-        cancelToken: cancelToken,
-        onReceiveProgress: onReceiveProgress,
-        options: options,
-        onSendProgress: onSendProgress,
-        queryParameters: query,
-      );
-
-      return response.data;
-    } catch (e) {
-      return _handleError(e);
-    }
-  }
-
-  Future<dynamic> put(
-      String endpoint,
-      dynamic body, {
-        Map<String, dynamic> query = const {},
-        CancelToken? cancelToken,
-        Options? options,
-        Function(int, int)? onReceiveProgress,
-        Function(int, int)? onSendProgress,
-      }) async {
-    try {
-      final response = await _dio.put(
-        endpoint,
-        data: jsonEncode(body),
-        cancelToken: cancelToken,
-        onReceiveProgress: onReceiveProgress,
-        options: options,
-        onSendProgress: onSendProgress,
-        queryParameters: query,
-      );
-      return response.data;
-    } catch (e) {
-      return _handleError(e);
-    }
-  }
-
-  Future<dynamic> delete(
-      String endpoint, {
-        dynamic body,
-        Map<String, dynamic> query = const {},
-        CancelToken? cancelToken,
-        Options? options,
-      }) async {
-    try {
-      final response = await _dio.delete(
-        endpoint,
-        data: body != null ? jsonEncode(body) : null,
-        queryParameters: query,
-        cancelToken: cancelToken,
-        options: options,
-      );
-      return response.data;
-    } catch (e) {
-      return _handleError(e);
-    }
-  }
-
-  Future<dynamic> multipart(
-      String endpoint, {
-        Map<String, String> body = const {},
-        Map<String, String> files = const {},
-      }) async {
+  Future<dynamic> multipart({
+    String endpoint = "/upload",
+    Map<String, String> body = const {},
+    Map<String, String> files = const {},
+    void Function(int, int)? onSendProgress,
+    CancelToken? cancelToken,
+  }) async {
     try {
       Map<String, dynamic> request = {};
 
@@ -133,32 +36,92 @@ class ApiClient {
 
       if (files.isNotEmpty) {
         for (MapEntry element in files.entries) {
-          request[element.key] = await MultipartFile.fromFile(element.value, filename: element.value.toString().split("/").last);
+          request[element.key] = await MultipartFile.fromFile(
+            element.value,
+            filename: element.value.toString().split("/").last,
+          );
         }
       }
 
       var form = FormData.fromMap(request);
 
-      final response = await _dio.post(endpoint, data: form);
+      final response = await _dio.post(
+        endpoint,
+        data: form,
+        onSendProgress: onSendProgress,
+        cancelToken: cancelToken,
+      );
       return response.data;
     } catch (e) {
       return _handleError(e);
     }
   }
 
-  Future<File?> download(String url) async {
+  Future<dynamic> base64({
+    String endpoint = "/upload",
+    required File file,
+    Map<String, dynamic> body = const {},
+    void Function(int, int)? onSendProgress,
+    CancelToken? cancelToken,
+  }) async {
     try {
-      final dir = await getApplicationDocumentsDirectory();
-      final path = '${dir.path}/${url.split('/').last}';
-      final file = File(path);
+      final bytes = await file.readAsBytes();
+      final base64String = base64Encode(bytes);
 
-      final dio = Dio();
-      dio.options.responseType = ResponseType.bytes;
-      final data = await dio.get(url);
-      await file.writeAsBytes(data.data);
-      return file;
+      final data = {"fileName": file.path.split("/").last, "fileData": base64String, ...body};
+
+      final response = await _dio.post(
+        endpoint,
+        data: data,
+        onSendProgress: onSendProgress,
+        cancelToken: cancelToken,
+      );
+
+      return response.data;
     } catch (e) {
-      return null;
+      return _handleError(e);
+    }
+  }
+
+  Future<dynamic> uploadZip({
+    String endpoint = "/upload",
+    required List<File> files,
+    Map<String, dynamic> body = const {},
+    void Function(int, int)? onSendProgress,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final archive = Archive();
+
+      for (var file in files) {
+        final fileBytes = await file.readAsBytes();
+        archive.addFile(ArchiveFile(file.path.split("/").last, fileBytes.length, fileBytes));
+      }
+
+      final tempDir = await getTemporaryDirectory();
+      final zipFilePath = '${tempDir.path}/upload_${DateTime.now().millisecondsSinceEpoch}.zip';
+      final zipFile = File(zipFilePath);
+      await zipFile.writeAsBytes(ZipEncoder().encode(archive));
+
+      final request = FormData.fromMap({
+        ...body,
+        'file': await MultipartFile.fromFile(zipFile.path, filename: 'upload.zip'),
+      });
+
+      final response = await _dio.post(
+        endpoint,
+        data: request,
+        onSendProgress: onSendProgress,
+        cancelToken: cancelToken,
+      );
+
+      if (await zipFile.exists()) {
+        await zipFile.delete();
+      }
+
+      return response.data;
+    } catch (e) {
+      return _handleError(e);
     }
   }
 
@@ -173,24 +136,49 @@ class ApiClient {
       }
       switch (e.response?.statusCode) {
         case 301:
-          return Future.error(response['message'] ?? "Moved Permanently: The resource has been permanently moved to a new location.");
+          return Future.error(
+            response['message'] ??
+                "Moved Permanently: The resource has been permanently moved to a new location.",
+          );
         case 400:
-          return Future.error(response['error'] ?? "Bad Request: The request contains bad syntax or cannot be fulfilled.");
+          return Future.error(
+            response['error'] ??
+                "Bad Request: The request contains bad syntax or cannot be fulfilled.",
+          );
         case 401:
-          return Future.error(response['error'] ?? "Unauthorized: Authentication is required and has failed or has not yet been provided.");
+          return Future.error(
+            response['error'] ??
+                "Unauthorized: Authentication is required and has failed or has not yet been provided.",
+          );
         case 403:
-          return Future.error(response['error'] ?? "Forbidden: You don't have permission to access this resource.");
+          return Future.error(
+            response['error'] ?? "Forbidden: You don't have permission to access this resource.",
+          );
         case 404:
-          return Future.error(response['error'] ?? "Not Found: The requested resource could not be found.");
+          return Future.error(
+            response['error'] ?? "Not Found: The requested resource could not be found.",
+          );
 
         case 500:
-          return Future.error(response['message'] ?? "Internal Server Error: The server has encountered an unexpected condition. Please try again later.");
+          return Future.error(
+            response['message'] ??
+                "Internal Server Error: The server has encountered an unexpected condition. Please try again later.",
+          );
         case 502:
-          return Future.error(response['message'] ?? "Bad Gateway: The server received an invalid response from an upstream server.");
+          return Future.error(
+            response['message'] ??
+                "Bad Gateway: The server received an invalid response from an upstream server.",
+          );
         case 503:
-          return Future.error(response['message'] ?? "Service Unavailable: The server is not ready to handle the request. Please try again after some time.");
+          return Future.error(
+            response['message'] ??
+                "Service Unavailable: The server is not ready to handle the request. Please try again after some time.",
+          );
         case 504:
-          return Future.error(response['message'] ?? "Gateway Timeout: The server, while acting as a gateway, did not get a response in time from the upstream server.");
+          return Future.error(
+            response['message'] ??
+                "Gateway Timeout: The server, while acting as a gateway, did not get a response in time from the upstream server.",
+          );
 
         default:
           return Future.error(response['message'] ?? 'Something went wrong.Please Try Again');
